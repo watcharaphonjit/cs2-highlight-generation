@@ -216,8 +216,8 @@ class CS2Montage:
     player_name : name shown in the kill feed (case-insensitive substring)
     clips_dir   : folder with .mp4 clips  (default: ./source/)
     output_dir  : where to write output   (default: ./output/)
-    date_start  : only include files with ctime >= this date ("YYYY-MM-DD")
-    date_end    : only include files with ctime <= this date ("YYYY-MM-DD")
+    date_start  : only include files with mtime >= this date ("YYYY-MM-DD")
+    date_end    : only include files with mtime <= this date ("YYYY-MM-DD")
     min_score   : minimum clip score to include (Kill=4, Double=6, 3K=8, Ace=10)
     """
 
@@ -246,7 +246,7 @@ class CS2Montage:
         and return sorted by created date oldest → newest.
 
         Returns list of clip dicts with keys:
-            file, path, ctime, ctime_date, duration_total, resolution
+            file, path, mtime, mtime_date, duration_total, resolution
         """
         from moviepy import VideoFileClip
 
@@ -256,12 +256,12 @@ class CS2Montage:
         clips = []
         for path in all_mp4:
             name       = os.path.basename(path)
-            ctime      = os.stat(path).st_ctime
-            ctime_date = datetime.fromtimestamp(ctime, tz=timezone.utc).date()
+            mtime      = os.stat(path).st_mtime
+            mtime_date = datetime.fromtimestamp(mtime, tz=timezone.utc).date()
 
-            if self.date_start and ctime_date < self.date_start:
+            if self.date_start and mtime_date < self.date_start:
                 continue
-            if self.date_end and ctime_date > self.date_end:
+            if self.date_end and mtime_date > self.date_end:
                 continue
 
             try:
@@ -275,18 +275,18 @@ class CS2Montage:
             clips.append({
                 "file":           name,
                 "path":           path,
-                "ctime":          ctime,
-                "ctime_date":     str(ctime_date),
+                "mtime":          mtime,
+                "mtime_date":     str(mtime_date),
                 "duration_total": duration,
                 "resolution":     f"{w}x{h}",
             })
 
-        clips.sort(key=lambda c: c["ctime"])
+        clips.sort(key=lambda c: c["mtime"])
 
         date_info = f" [{self.date_start} → {self.date_end}]" if (self.date_start or self.date_end) else ""
         print(f"Loaded {len(clips)} clips{date_info}, sorted oldest→newest\n")
         for c in clips:
-            print(f"  {c['duration_total']:>5.1f}s  {c['ctime_date']}  {c['file'][:60]}")
+            print(f"  {c['duration_total']:>5.1f}s  {c['mtime_date']}  {c['file'][:60]}")
         return clips
 
     # ── Step 2: detect_kills ─────────────────────────────────────────────────
@@ -345,7 +345,7 @@ class CS2Montage:
         fps:        int   = 60,
     ) -> str:
         """
-        Render kill segments across all clips (ctime-sorted).
+        Render kill segments across all clips (mtime-sorted).
 
         merge logic: kills are merged into one segment when the gap between them
         is less than pre_sec + post_sec — the exact threshold that would cause
