@@ -389,7 +389,7 @@ class CS2Montage:
             print(f"{i:<4} {kills_str:>18}  [{ts:.1f}s→{te:.1f}s] {te-ts:>5.1f}s  {clip['file'][:40]}")
 
             try:
-                vid = VideoFileClip(clip["path"]).subclipped(ts, te).without_audio()
+                vid = VideoFileClip(clip["path"]).subclipped(ts, te)
                 rendered.append(vid)
 
             except Exception as e:
