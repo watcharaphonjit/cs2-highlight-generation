@@ -341,14 +341,16 @@ class CS2Montage:
         output: Optional[str] = None,
         pre_sec:    float = 3.0,
         post_sec:   float = 3.0,
-        merge_gap:  float = 3.0,
         last_extra: float = 3.0,
         fps:        int   = 60,
     ) -> str:
         """
         Render kill segments across all clips (ctime-sorted).
 
-        Consecutive kills within merge_gap seconds are merged into one segment:
+        merge logic: kills are merged into one segment when the gap between them
+        is less than pre_sec + post_sec — the exact threshold that would cause
+        overlapping windows, so overlap is mathematically impossible.
+
             segment = [first_kill - pre_sec  →  last_kill + post_sec]
 
         The very last segment gets last_extra additional seconds at the end.
@@ -359,6 +361,9 @@ class CS2Montage:
 
         if output is None:
             output = os.path.join(self.output_dir, "final_highlight.mp4")
+
+        # merge_gap = pre_sec + post_sec guarantees no two segments ever overlap
+        merge_gap = pre_sec + post_sec
 
         # Build flat list of segments: (clip, first_kill, last_kill)
         segments = []

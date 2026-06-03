@@ -26,7 +26,7 @@ if __name__ == "__main__":
         date_start  = DATE_START,
         date_end    = DATE_END,
     ).run(
-        pre_sec   = 3.0,   # seconds before first kill in a group
-        post_sec  = 3.0,   # seconds after last kill in a group
-        merge_gap = 3.0,   # kills within this many seconds → same segment
+        pre_sec  = 3.0,   # seconds before first kill in a group
+        post_sec = 3.0,   # seconds after last kill in a group
+        # kills within pre_sec + post_sec = 6s are auto-merged (no overlap guaranteed)
     )
