@@ -31,6 +31,7 @@ from typing import Optional, Union
 import numpy as np
 import cv2
 
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # Default paths relative to this library file
@@ -339,30 +340,36 @@ class CS2Montage:
         self,
         clips: list[dict],
         output: Optional[str] = None,
-        pre_sec:    float = 3.0,
-        post_sec:   float = 3.0,
-        last_extra: float = 3.0,
-        fps:        int   = 60,
+        pre_sec:       float = 3.0,
+        post_sec:      float = 3.0,
+        last_extra:    float = 3.0,
+        fps:           int   = 60,
+        music_path:    Optional[str] = None,
+        music_volume:  float = 0.5,
+        game_volume:   float = 0.8,
+        music_fade:    float = 2.0,
+        beat_sync:     bool  = False,
     ) -> str:
         """
         Render kill segments across all clips (mtime-sorted).
 
-        merge logic: kills are merged into one segment when the gap between them
-        is less than pre_sec + post_sec — the exact threshold that would cause
-        overlapping windows, so overlap is mathematically impossible.
+        Kills within pre_sec + post_sec seconds are merged into one segment:
+            [first_kill - pre_sec → last_kill + post_sec]
 
-            segment = [first_kill - pre_sec  →  last_kill + post_sec]
-
-        The very last segment gets last_extra additional seconds at the end.
+        beat_sync=True (requires music_path):
+            Each segment is stretched/trimmed to an exact multiple of the beat
+            interval, so every cut lands precisely on a beat.
+            kill moment stays visible; extra time is added to the end of segment.
 
         Returns the output file path.
         """
-        from moviepy import VideoFileClip, concatenate_videoclips
+        from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip
+        from moviepy import concatenate_audioclips
+        from moviepy.audio.fx import MultiplyVolume, AudioFadeOut
 
         if output is None:
             output = os.path.join(self.output_dir, "final_highlight.mp4")
 
-        # merge_gap = pre_sec + post_sec guarantees no two segments ever overlap
         merge_gap = pre_sec + post_sec
 
         # Build flat list of segments: (clip, first_kill, last_kill)
@@ -372,9 +379,21 @@ class CS2Montage:
             for first_k, last_k in _group_kills(kill_times, merge_gap):
                 segments.append((clip, first_k, last_k))
 
+        # ── Beat sync: detect BPM and compute beat interval ───────────────────
+        beat_interval = None
+        if beat_sync and music_path and os.path.isfile(music_path):
+            try:
+                import librosa
+                y, sr = librosa.load(music_path, mono=True)
+                tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+                beat_interval = float(60.0 / float(np.asarray(tempo).flat[0]))
+                print(f"Beat sync ON — BPM: {60/beat_interval:.1f}, beat interval: {beat_interval:.3f}s")
+            except ImportError:
+                print("  [beat_sync] librosa not installed — pip install librosa. Skipping.")
+
         print(f"\nRendering {len(segments)} segments from {len(clips)} clips → {output}\n")
-        print(f"{'#':<4} {'kills':>18}  {'window':>15}  {'dur':>5}  file")
-        print("-" * 80)
+        print(f"{'#':<4} {'kills':>18}  {'window':>15}  {'dur':>5}  {'beats':>5}  file")
+        print("-" * 90)
 
         rendered = []
         for i, (clip, first_k, last_k) in enumerate(segments, 1):
@@ -384,14 +403,28 @@ class CS2Montage:
 
             ts = max(0.0, first_k - pre_sec)
             te = min(dur,  last_k  + post_sec + extra)
-            kills_str = f"{first_k:.1f}s" if first_k == last_k else f"{first_k:.1f}s–{last_k:.1f}s"
 
-            print(f"{i:<4} {kills_str:>18}  [{ts:.1f}s→{te:.1f}s] {te-ts:>5.1f}s  {clip['file'][:40]}")
+            # ── Snap segment length to nearest beat multiple ──────────────────
+            beats_str = ""
+            if beat_interval:
+                natural_dur = te - ts
+                import math
+                n_beats  = max(1, math.ceil(natural_dur / beat_interval))
+                target   = n_beats * beat_interval
+                # Extend te first (post-kill tail), then ts (pre-kill setup)
+                extend   = target - natural_dur
+                new_te   = min(dur, te + extend)
+                extend   = target - (new_te - ts)        # remaining to fill from pre-kill
+                new_ts   = max(0.0, ts - extend)
+                ts, te   = new_ts, new_te
+                beats_str = f"{n_beats}b"
+
+            kills_str = f"{first_k:.1f}s" if first_k == last_k else f"{first_k:.1f}s–{last_k:.1f}s"
+            print(f"{i:<4} {kills_str:>18}  [{ts:.1f}s→{te:.1f}s] {te-ts:>5.1f}s  {beats_str:>5}  {clip['file'][:37]}")
 
             try:
                 vid = VideoFileClip(clip["path"]).subclipped(ts, te)
                 rendered.append(vid)
-
             except Exception as e:
                 print(f"  ERROR: {e}")
 
@@ -402,6 +435,32 @@ class CS2Montage:
         final     = concatenate_videoclips(rendered, method="compose")
         total_dur = final.duration
         print(f"Total duration: {total_dur:.1f}s ({total_dur/60:.1f} min)")
+
+        # ── Mix background music ──────────────────────────────────────────────
+        if music_path and os.path.isfile(music_path):
+            print(f"Adding music: {os.path.basename(music_path)}")
+            from moviepy import CompositeAudioClip
+
+            music = AudioFileClip(music_path)
+
+            # Loop until it covers the full video duration
+            if music.duration < total_dur:
+                loops = int(total_dur / music.duration) + 1
+                music = concatenate_audioclips([music] * loops)
+            music = music.subclipped(0, total_dur)
+
+            # Apply volume and fade out
+            music = music.with_effects([
+                MultiplyVolume(music_volume),
+                AudioFadeOut(music_fade),
+            ])
+
+            # Scale game audio and mix
+            game_audio = final.audio.with_effects([MultiplyVolume(game_volume)])
+            final = final.with_audio(CompositeAudioClip([game_audio, music]))
+            print(f"  game audio: {game_volume:.0%}  music: {music_volume:.0%}  fade-out: {music_fade}s")
+        elif music_path:
+            print(f"  [music] file not found: {music_path} — skipped")
 
         print(f"Exporting → {output}")
         final.write_videofile(
